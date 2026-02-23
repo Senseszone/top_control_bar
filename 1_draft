@@ -1,0 +1,481 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+/**
+ * UnitSessionShell
+ * - Hard session limit: sessionTotalMs (default 20:00). Always decreases.
+ * - Training budget: trainingBudgetMs (default 10:00). Decreases ONLY while RUNNING.
+ * - Game duration is provided from iSenses via gameDurationMs.
+ * - No pause during RUNNING.
+ * - STOP = stop only current game (partial score allowed).
+ * - EXIT = end whole session.
+ * - INSTRUCTIONS inactivity protection: after inactivityTimeoutMs -> reset to IDLE (code entry).
+ *
+ * Integration:
+ * - pass GameComponent which should accept:
+ *   { sessionId, taskId, emitEvent, emitScore, mode, gameDurationMs, stopSignal, onEnd, onProgress, title }
+ *   - mode: "INSTRUCTIONS" | "READY" | "RUNNING" | "STOPPING" | "ENDED"
+ *   - stopSignal increments when STOP or EXIT requires game to finish ASAP.
+ *   - onEnd({ reason, metrics, events? }) -> shell will forward emitScore once per game.
+ *   - onProgress(pct) optional (0..100) but we mainly use training progress bar from budget.
+ */
+export default function UnitSessionShell({
+  sessionId,
+  taskId,
+  emitEvent,
+  emitScore,
+
+  // Provided/configured by iSenses
+  title = "Název hry",
+  sessionTotalMs = 20 * 60 * 1000,
+  trainingBudgetMs = 10 * 60 * 1000,
+  gameDurationMs = 60 * 1000,
+
+  inactivityTimeoutMs = 2 * 60 * 1000, // protection while in INSTRUCTIONS/READY
+  topBarHeightPx = 220,
+
+  GameComponent, // optional; if not provided, a placeholder is rendered
+}) {
+  const MODE = useMemo(
+    () => ({
+      IDLE: "IDLE", // waiting for code / entry screen in your app
+      INSTRUCTIONS: "INSTRUCTIONS",
+      READY: "READY",
+      RUNNING: "RUNNING",
+      STOPPING: "STOPPING",
+      ENDED: "ENDED",
+    }),
+    []
+  );
+
+  const [mode, setMode] = useState(MODE.INSTRUCTIONS);
+
+  const [sessionRemainingMs, setSessionRemainingMs] = useState(sessionTotalMs);
+  const [trainingRemainingMs, setTrainingRemainingMs] = useState(trainingBudgetMs);
+  const [gameRemainingMs, setGameRemainingMs] = useState(gameDurationMs);
+
+  const [stopSignal, setStopSignal] = useState(0);
+  const [gameSeq, setGameSeq] = useState(0);
+
+  const lastActivityRef = useRef(Date.now());
+  const tickRef = useRef(null);
+
+  const gameScoreEmittedRef = useRef(false);
+  const endedRef = useRef(false);
+
+  const trainingUsedPct = useMemo(() => {
+    const used = Math.max(0, trainingBudgetMs - trainingRemainingMs);
+    return trainingBudgetMs <= 0 ? 0 : Math.min(100, (used / trainingBudgetMs) * 100);
+  }, [trainingBudgetMs, trainingRemainingMs]);
+
+  const touchActivity = (type, data = {}) => {
+    lastActivityRef.current = Date.now();
+    if (emitEvent) {
+      emitEvent({ type, ts: Date.now(), data: { sessionId, taskId, ...data } });
+    }
+  };
+
+  const formatMs = (ms) => {
+    const clamped = Math.max(0, ms);
+    const totalSec = Math.floor(clamped / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    const mm = String(m).padStart(2, "0");
+    const ss = String(s).padStart(2, "0");
+    return `${mm}:${ss}`;
+  };
+
+  const resetForNextGame = () => {
+    setGameRemainingMs(gameDurationMs);
+    gameScoreEmittedRef.current = false;
+    setGameSeq((x) => x + 1);
+  };
+
+  const hardEndSession = (reason) => {
+    if (endedRef.current) return;
+    endedRef.current = true;
+
+    setMode(MODE.ENDED);
+    touchActivity("END_SESSION", { reason });
+
+    // If a game is running, request it to stop and let it emit partial score.
+    // We do not attempt to fabricate metrics here.
+    if (mode === MODE.RUNNING || mode === MODE.STOPPING) {
+      setMode(MODE.STOPPING);
+      setStopSignal((x) => x + 1);
+    }
+  };
+
+  const startGame = () => {
+    if (mode !== MODE.INSTRUCTIONS && mode !== MODE.READY) return;
+    if (sessionRemainingMs <= 0) return;
+    if (trainingRemainingMs <= 0) return;
+
+    resetForNextGame();
+    setMode(MODE.RUNNING);
+    touchActivity("START_GAME", { title, gameDurationMs });
+  };
+
+  const stopGame = () => {
+    if (mode !== MODE.RUNNING) return;
+    setMode(MODE.STOPPING);
+    setStopSignal((x) => x + 1);
+    touchActivity("STOP_GAME", { reason: "USER_STOP" });
+  };
+
+  const exitSession = () => {
+    touchActivity("EXIT_SESSION", { reason: "USER_EXIT" });
+    hardEndSession("USER_EXIT");
+  };
+
+  // Tick loop
+  useEffect(() => {
+    if (tickRef.current) clearInterval(tickRef.current);
+
+    tickRef.current = setInterval(() => {
+      const now = Date.now();
+      const dt = 250; // ms per tick (fixed step)
+
+      // inactivity protection in instructions/ready
+      if (mode === MODE.INSTRUCTIONS || mode === MODE.READY) {
+        if (now - lastActivityRef.current >= inactivityTimeoutMs) {
+          // Reset to IDLE (your app should show code entry)
+          setMode(MODE.IDLE);
+          touchActivity("AUTO_RESET", { reason: "INACTIVITY" });
+          // Reset timers to defaults for next client
+          setSessionRemainingMs(sessionTotalMs);
+          setTrainingRemainingMs(trainingBudgetMs);
+          setGameRemainingMs(gameDurationMs);
+          gameScoreEmittedRef.current = false;
+          endedRef.current = false;
+          return;
+        }
+      }
+
+      // hard session total always decreases until 0 (except IDLE/ENDED)
+      if (mode !== MODE.IDLE && mode !== MODE.ENDED) {
+        setSessionRemainingMs((prev) => Math.max(0, prev - dt));
+      }
+
+      // training + game only decrease while RUNNING
+      if (mode === MODE.RUNNING) {
+        setTrainingRemainingMs((prev) => Math.max(0, prev - dt));
+        setGameRemainingMs((prev) => Math.max(0, prev - dt));
+      }
+
+      // hard limits
+      if (mode !== MODE.IDLE && mode !== MODE.ENDED) {
+        if (sessionRemainingMs <= 0) {
+          hardEndSession("SESSION_TOTAL_TIMEOUT");
+        } else if (trainingRemainingMs <= 0) {
+          hardEndSession("TRAINING_BUDGET_TIMEOUT");
+        } else if (mode === MODE.RUNNING && gameRemainingMs <= 0) {
+          // Game time elapsed: request game to finish naturally (so it emits score)
+          setMode(MODE.STOPPING);
+          setStopSignal((x) => x + 1);
+          touchActivity("STOP_GAME", { reason: "GAME_TIMEOUT" });
+        }
+      }
+    }, 250);
+
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    inactivityTimeoutMs,
+    sessionTotalMs,
+    trainingBudgetMs,
+    gameDurationMs,
+    // NOTE: keep these in deps to avoid stale closure issues
+    sessionRemainingMs,
+    trainingRemainingMs,
+    gameRemainingMs,
+  ]);
+
+  // Ensure gameDurationMs updates reset the current gameRemaining (only when not running)
+  useEffect(() => {
+    if (mode !== MODE.RUNNING && mode !== MODE.STOPPING) {
+      setGameRemainingMs(gameDurationMs);
+    }
+  }, [gameDurationMs, mode]);
+
+  const onGameProgress = (pct) => {
+    // optional; you said live metrics not needed. Keep hook for future UI.
+    touchActivity("GAME_PROGRESS", { pct });
+  };
+
+  const onGameEnd = ({ reason, metrics }) => {
+    // metrics must already use iSenses unified names; shell only forwards
+    if (!gameScoreEmittedRef.current && emitScore) {
+      gameScoreEmittedRef.current = true;
+      emitScore({ taskId, metrics });
+    }
+
+    touchActivity("END_GAME", { reason });
+
+    if (endedRef.current) {
+      setMode(MODE.ENDED);
+      return;
+    }
+
+    // After a game ends (timeout or stop), go back to INSTRUCTIONS/READY
+    // If you want: INSTRUCTIONS screen between games, keep INSTRUCTIONS.
+    setMode(MODE.INSTRUCTIONS);
+    resetForNextGame();
+  };
+
+  // UI
+  const styles = useMemo(() => {
+    const royalBlue = "#124A8A"; // from MySenses manual
+    const marigold = "#F2A300";
+    const black = "#1D1D1D";
+
+    return {
+      root: {
+        width: "100%",
+        height: "100%",
+        background: "#050B14",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        fontFamily: "Ubuntu, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+      },
+
+      topBar: {
+        height: `${topBarHeightPx}px`,
+        padding: "18px 22px",
+        boxSizing: "border-box",
+        background: `linear-gradient(180deg, rgba(18,74,138,0.28) 0%, rgba(29,29,29,0.65) 100%)`,
+        borderBottom: "1px solid rgba(242,163,0,0.18)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "14px",
+      },
+
+      row1: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "18px",
+      },
+
+      leftBlock: {
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px",
+        minWidth: 0,
+        flex: 1,
+      },
+
+      title: {
+        color: "rgba(255,255,255,0.92)",
+        fontSize: 26,
+        fontWeight: 700,
+        letterSpacing: 0.2,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      },
+
+      timeRow: {
+        display: "flex",
+        alignItems: "baseline",
+        gap: "14px",
+      },
+
+      timeLabel: {
+        color: "rgba(255,255,255,0.78)",
+        fontSize: 18,
+        fontWeight: 600,
+      },
+
+      timeValue: {
+        color: marigold,
+        fontSize: 56,
+        fontWeight: 800,
+        lineHeight: 1,
+        letterSpacing: 1,
+        textShadow: "0 6px 20px rgba(0,0,0,0.45)",
+      },
+
+      buttons: {
+        display: "flex",
+        gap: "14px",
+        alignItems: "center",
+        flexShrink: 0,
+      },
+
+      btn: {
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 14,
+        padding: "16px 26px",
+        fontSize: 22,
+        fontWeight: 800,
+        color: "rgba(255,255,255,0.95)",
+        background: "rgba(255,255,255,0.06)",
+        cursor: "pointer",
+        userSelect: "none",
+        boxShadow: "0 10px 22px rgba(0,0,0,0.32)",
+      },
+
+      btnStart: {
+        background: "linear-gradient(180deg, rgba(52,199,89,0.95) 0%, rgba(28,140,55,0.95) 100%)",
+        border: "1px solid rgba(52,199,89,0.55)",
+      },
+
+      btnStop: {
+        background: "linear-gradient(180deg, rgba(255,59,48,0.95) 0%, rgba(176,26,19,0.95) 100%)",
+        border: "1px solid rgba(255,59,48,0.55)",
+      },
+
+      btnExit: {
+        background: `linear-gradient(180deg, rgba(18,74,138,0.95) 0%, rgba(12,46,86,0.95) 100%)`,
+        border: "1px solid rgba(18,74,138,0.65)",
+      },
+
+      btnDisabled: {
+        opacity: 0.45,
+        cursor: "not-allowed",
+      },
+
+      progressWrap: {
+        height: 26,
+        borderRadius: 14,
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        overflow: "hidden",
+        position: "relative",
+      },
+
+      progressFill: {
+        height: "100%",
+        width: `${trainingUsedPct}%`,
+        background: `linear-gradient(90deg, ${royalBlue} 0%, ${marigold} 100%)`,
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+        transition: "width 120ms linear",
+      },
+
+      progressTicks: {
+        position: "absolute",
+        inset: 0,
+        backgroundImage:
+          "repeating-linear-gradient(90deg, rgba(255,255,255,0.10) 0px, rgba(255,255,255,0.10) 1px, rgba(255,255,255,0.0) 1px, rgba(255,255,255,0.0) 18px)",
+        pointerEvents: "none",
+        opacity: 0.45,
+      },
+
+      gameArea: {
+        flex: 1,
+        background: black,
+        display: "flex",
+        alignItems: "stretch",
+        justifyContent: "stretch",
+        overflow: "hidden",
+      },
+
+      placeholder: {
+        flex: 1,
+        color: "rgba(255,255,255,0.65)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 18,
+      },
+    };
+  }, [topBarHeightPx, trainingUsedPct]);
+
+  const canStart = (mode === MODE.INSTRUCTIONS || mode === MODE.READY) && sessionRemainingMs > 0 && trainingRemainingMs > 0;
+  const canStop = mode === MODE.RUNNING;
+  const canExit = mode !== MODE.IDLE && mode !== MODE.ENDED;
+
+  return (
+    <div style={styles.root} onMouseMove={() => touchActivity("UI_ACTIVITY")} onClick={() => touchActivity("UI_ACTIVITY")}>
+      <div style={styles.topBar}>
+        <div style={styles.row1}>
+          <div style={styles.leftBlock}>
+            <div style={styles.title}>{title}</div>
+
+            <div style={styles.timeRow}>
+              <div style={styles.timeLabel}>Čas do konce tréninku</div>
+              <div style={styles.timeValue}>{formatMs(trainingRemainingMs)}</div>
+            </div>
+          </div>
+
+          <div style={styles.buttons}>
+            <button
+              style={{
+                ...styles.btn,
+                ...styles.btnExit,
+                ...(canExit ? null : styles.btnDisabled),
+              }}
+              onClick={() => {
+                if (!canExit) return;
+                exitSession();
+              }}
+            >
+              Exit
+            </button>
+
+            <button
+              style={{
+                ...styles.btn,
+                ...styles.btnStart,
+                ...(canStart ? null : styles.btnDisabled),
+              }}
+              onClick={() => {
+                if (!canStart) return;
+                touchActivity("CLICK_START");
+                startGame();
+              }}
+            >
+              Start
+            </button>
+
+            <button
+              style={{
+                ...styles.btn,
+                ...styles.btnStop,
+                ...(canStop ? null : styles.btnDisabled),
+              }}
+              onClick={() => {
+                if (!canStop) return;
+                touchActivity("CLICK_STOP");
+                stopGame();
+              }}
+            >
+              Stop
+            </button>
+          </div>
+        </div>
+
+        <div style={styles.progressWrap} aria-label="Training progress">
+          <div style={styles.progressFill} />
+          <div style={styles.progressTicks} />
+        </div>
+      </div>
+
+      <div style={styles.gameArea}>
+        {GameComponent ? (
+          <GameComponent
+            key={`${taskId}-${gameSeq}`}
+            sessionId={sessionId}
+            taskId={taskId}
+            emitEvent={emitEvent}
+            emitScore={emitScore}
+            title={title}
+            mode={mode}
+            gameDurationMs={gameDurationMs}
+            stopSignal={stopSignal}
+            onProgress={onGameProgress}
+            onEnd={onGameEnd}
+          />
+        ) : (
+          <div style={styles.placeholder}>
+            Sem přijde herní komponenta (GameComponent). Mode: {mode}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
