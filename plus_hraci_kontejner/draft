@@ -1,0 +1,98 @@
+<!-- GameSurface4K.vue
+4K kontejner pro unit_logic: nahoře pevný ovládací panel, pod ním hrací plocha.
+Drží stabilní referenční rozměr 3520×1840 a řeší layout flex sloupcem.
+-->
+<template>
+  <div class="surface" :style="surfaceStyle">
+    <TopControlBar
+      class="topbar"
+      :title="title"
+      :isPaused="isPaused"
+      :hardLimitMs="hardLimitMs"
+      :activePlayMs="activePlayMs"
+      :hardRemainingMs="hardRemainingMs"
+      :playRemainingMs="playRemainingMs"
+      @exit="onExit"
+      @stopGame="onStopGame"
+      @togglePause="onTogglePause"
+    />
+
+    <div class="playable">
+      <!-- sem patří Game View / LayoutEngine output -->
+      <slot />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed } from "vue";
+import TopControlBar from "./TopControlBar.vue";
+
+const BASE_W = 3520;
+const BASE_H = 1840;
+
+const props = defineProps<{
+  title: string;
+
+  // časování podle vaší logiky session/tréninku
+  hardLimitMs: number;        // např. 20 min ochranný limit
+  activePlayMs: number;       // např. 10 min čistý herní čas (odečítaný)
+  hardRemainingMs: number;    // kolik zbývá do hard limitu
+  playRemainingMs: number;    // kolik zbývá čistého herního času
+
+  isPaused: boolean;
+
+  // volitelně: render do různých obrazovek přes scale (když nepoužíváš native 4K)
+  scale?: number; // 1 = 1:1, 0.5 = poloviční
+}>();
+
+const emit = defineEmits<{
+  (e: "exit"): void;
+  (e: "stopGame"): void;
+  (e: "togglePause"): void;
+}>();
+
+const surfaceStyle = computed(() => {
+  const s = typeof props.scale === "number" ? props.scale : 1;
+  return {
+    width: `${BASE_W}px`,
+    height: `${BASE_H}px`,
+    transform: s === 1 ? "none" : `scale(${s})`,
+    transformOrigin: "top left",
+  } as Record<string, string>;
+});
+
+function onExit() {
+  emit("exit");
+}
+
+function onStopGame() {
+  emit("stopGame");
+}
+
+function onTogglePause() {
+  emit("togglePause");
+}
+</script>
+
+<style scoped>
+.surface {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #0b0f17; /* jen neutral, přepoj na váš brand */
+  overflow: hidden;
+}
+
+/* Ovládací panel nahoře */
+.topbar {
+  flex: 0 0 auto;
+}
+
+/* Hrací plocha vždy vyplní zbytek výšky */
+.playable {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+}
+</style>
