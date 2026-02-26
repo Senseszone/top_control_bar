@@ -14,27 +14,26 @@ Tlačítka Exit / Start / Stop jsou vždy viditelná vpravo nahoře, bílé poza
       <button class="btn" :disabled="!canStop" @click="emit('stop')">Stop</button>
     </div>
 
-    <!-- Střed: název hry + pod ním časový box -->
-    <div class="center">
-      <div class="title" :title="title">{{ title }}</div>
-
-      <!-- Bílý box 3cm × 1cm; uvnitř Play time a volitelně Hard time v posledních 5 min -->
-      <div class="timeBox">
-        <span class="timePlay">{{ fmt(playRemainingMs) }}</span>
-        <span v-if="showHardWarning" class="sep">|</span>
-        <span v-if="showHardWarning" class="timeHard">{{ fmt(hardRemainingMs) }}</span>
-      </div>
-
-      <!-- Popisek pro hard time se ukáže jen při varování -->
-      <div v-if="showHardWarning" class="hardLabel">Čas do ukončení tréninku</div>
-    </div>
+    <!-- Název vlevo + čas uprostřed -->
+<div style="display:flex; align-items:center; width:100%; position:relative;">
+  <!-- vlevo -->
+  <div style="flex:1; min-width:0;">
+    <div class="title" :title="title">{{ title }}</div>
   </div>
-</template>
 
-<script setup lang="ts">
-import { computed } from "vue";
+  <!-- uprostřed (absolutně vycentrované) -->
+  <div style="position:absolute; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center;">
+    <div class="timeBox">
+      <span class="timePlay">{{ fmt(playRemainingMs) }}</span>
+      <span v-if="showHardWarning" class="sep">|</span>
+      <span v-if="showHardWarning" class="timeHard">{{ fmt(hardRemainingMs) }}</span>
+    </div>
 
+    <div v-if="showHardWarning" class="hardLabel">Čas do ukončení tréninku</div>
+  </div>
+</div>
 /*
+
 Props:
 - title: název hry (vždy uprostřed).
 - playRemainingMs: hlavní odpočet (zobrazen vždy).
@@ -138,7 +137,7 @@ function fmt(ms: number) {
   width: 70%;
 }
 
-/* Název hry: vždy uprostřed, ořez dlouhých názvů */
+/* Název hry: vždy vlevo, ořez dlouhých názvů */
 .title {
   color: #124A8A;
   font-size: 28px;
@@ -151,7 +150,7 @@ function fmt(ms: number) {
 
 /* Časový box: bílý, 3cm × 1cm, zaoblený */
 .timeBox {
-  width: 3cm;
+  width: 6cm;
   height: 1cm;
   background: #ffffff;
   border-radius: 14px;
