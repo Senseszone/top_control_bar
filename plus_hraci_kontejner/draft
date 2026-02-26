@@ -28,8 +28,8 @@ Drží stabilní referenční rozměr 3520×1840 a řeší layout flex sloupcem.
 import { computed } from "vue";
 import TopControlBar from "./TopControlBar.vue";
 
-const BASE_W = 3520;
-const BASE_H = 1840;
+const BASE_W = 1915;
+const BASE_H = 1075;
 
 const props = defineProps<{
   title: string;
@@ -80,7 +80,7 @@ function onTogglePause() {
   position: relative;
   display: flex;
   flex-direction: column;
-  background: #0b0f17; /* jen neutral, přepoj na váš brand */
+  background: #124A8A; 
   overflow: hidden;
 }
 
