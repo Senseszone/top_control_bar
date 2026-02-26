@@ -1,61 +1,195 @@
-<!-- ui/ProgressPill.vue
-Jednoduchá komponenta pro procenta dokončení (Play progress).
+```vue
+<!--
+TopControlBar.vue (Vue 3)
+Výsledek: název hry je vždy přesně uprostřed baru, pod ním je „časový box“ (bílý, 3 cm × 1 cm, zaoblený).
+V boxu je vždy Play time modře (ROYAL BLUE) a posledních 5 minut se vedle něj zobrazí i Hard time červeně (SportSenses red).
+Tlačítka Exit / Start / Stop jsou vždy viditelná vpravo nahoře, bílé pozadí + nápis ROYAL BLUE.
 -->
 <template>
-  <div class="pill">
-    <div class="label">{{ label }}</div>
-    <div class="track">
-      <div class="fill" :style="{ width: `${clamped}%` }"></div>
+  <div class="bar">
+    <!-- Ovládací tlačítka: vždy renderovaná, vpravo nahoře, vedle sebe -->
+    <div class="actions">
+      <button class="btn" @click="emit('exit')">Exit</button>
+      <button class="btn" :disabled="!canStart" @click="emit('start')">Start</button>
+      <button class="btn" :disabled="!canStop" @click="emit('stop')">Stop</button>
     </div>
-    <div class="pct">{{ clamped }}%</div>
+
+    <!-- Střed: název hry + pod ním časový box -->
+    <div class="center">
+      <div class="title" :title="title">{{ title }}</div>
+
+      <!-- Bílý box 3cm × 1cm; uvnitř Play time a volitelně Hard time v posledních 5 min -->
+      <div class="timeBox">
+        <span class="timePlay">{{ fmt(playRemainingMs) }}</span>
+        <span v-if="showHardWarning" class="sep">|</span>
+        <span v-if="showHardWarning" class="timeHard">{{ fmt(hardRemainingMs) }}</span>
+      </div>
+
+      <!-- Popisek pro hard time se ukáže jen při varování -->
+      <div v-if="showHardWarning" class="hardLabel">Čas do ukončení tréninku</div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 
+/*
+Props:
+- title: název hry (vždy uprostřed).
+- playRemainingMs: hlavní odpočet (zobrazen vždy).
+- hardRemainingMs: ochranný limit (zobrazen jen posledních 5 minut vedle play time).
+- canStart/canStop: jen řídí disabled stav tlačítek, tlačítka se nikdy neschovávají.
+*/
 const props = defineProps<{
-  label: string;
-  value: number;
+  title: string;
+  playRemainingMs: number;
+  hardRemainingMs: number;
+  canStart: boolean;
+  canStop: boolean;
 }>();
 
-const clamped = computed(() => {
-  const v = Number.isFinite(props.value) ? props.value : 0;
-  return Math.min(100, Math.max(0, Math.round(v)));
-});
+/*
+Emity:
+- start: spustí aktuální hru
+- stop: ukončí aktuální hru
+- exit: ukončí celou session
+*/
+const emit = defineEmits<{
+  (e: "start"): void;
+  (e: "stop"): void;
+  (e: "exit"): void;
+}>();
+
+/* Posledních 5 minut zobrazíme hard time vedle play time */
+const HARD_WARNING_MS = 5 * 60 * 1000;
+const showHardWarning = computed(() => props.hardRemainingMs > 0 && props.hardRemainingMs <= HARD_WARNING_MS);
+
+/* Formát mm:ss */
+function fmt(ms: number) {
+  const t = Math.max(0, ms ?? 0);
+  const totalSec = Math.floor(t / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
 </script>
 
 <style scoped>
-.pill {
-  width: 740px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
+/* Brand konstanty */
+:root {
+  /* MySenses ROYAL BLUE */
+  --royal-blue: #124A8A;
+  /* SportSenses red (pokud máte přesný HEX, nahraď) */
+  --sportsenses-red: #FF3B30;
 }
 
-.label {
-  font-size: 20px;
-  color: rgba(255,255,255,0.68);
-  font-weight: 600;
-}
-
-.track {
-  height: 22px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.10);
-  overflow: hidden;
-  border: 1px solid rgba(255,255,255,0.10);
-}
-
-.fill {
+/* Bar: relativní kontejner, aby šlo přesně pozicovat pravý horní roh i střed */
+.bar {
+  position: relative;
   height: 100%;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.42);
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.20) 0%, rgba(0,0,0,0.34) 100%);
+  border-bottom: 1px solid rgba(242,163,0,0.18);
+  overflow: hidden;
 }
 
-.pct {
-  font-size: 20px;
-  color: rgba(255,255,255,0.76);
-  font-weight: 650;
+/* Tlačítka: vpravo nahoře, vedle sebe */
+.actions {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  gap: 10px;
+  z-index: 2;
+}
+
+/* Tlačítka: bílé pozadí, nápis ROYAL BLUE */
+.btn {
+  background: #ffffff;
+  color: #124A8A;
+  border: 1px solid rgba(18,74,138,0.30);
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+  user-select: none;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Středový blok: absolutně uprostřed obrazovky */
+.center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  z-index: 1;
+  text-align: center;
+  width: 70%;
+}
+
+/* Název hry: vždy uprostřed, ořez dlouhých názvů */
+.title {
+  color: #124A8A;
+  font-size: 28px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Časový box: bílý, 3cm × 1cm, zaoblený */
+.timeBox {
+  width: 3cm;
+  height: 1cm;
+  background: #ffffff;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.28);
+}
+
+/* Play time: ROYAL BLUE */
+.timePlay {
+  color: #124A8A;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+
+/* Hard time: SportSenses red (jen při varování) */
+.timeHard {
+  color: #FF3B30;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+
+.sep {
+  color: rgba(0,0,0,0.25);
+  font-weight: 800;
+}
+
+/* Textová hláška pro hard time */
+.hardLabel {
+  color: rgba(255,255,255,0.85);
+  font-size: 16px;
+  font-weight: 700;
 }
 </style>
+```
